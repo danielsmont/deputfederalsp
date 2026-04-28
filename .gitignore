@@ -1,0 +1,23 @@
+# Raw TSE downloads (large files, regenerate with download_and_filter.py + prep_data.py)
+Data/*.csv
+Data/*.zip
+Data/agg/votos_por_municipio_*.csv
+
+# Keep the small aggregated files
+!Data/agg/candidatos_*.csv
+!Data/agg/resumo_candidato_*.csv
+!Data/agg/votos_totais_*.csv
+!Data/agg/votos_municipio_agregado_*.csv
+!Data/agg/votos_municipio_eleitos_*.csv
+!Data/agg/votos_municipio_top200_*.csv
+!Data/agg/despesas_por_categoria_*.csv
+!Data/agg/receitas_por_fonte_*.csv
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# OS
+.DS_Store
+Thumbs.db
