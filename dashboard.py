@@ -151,6 +151,23 @@ def load_receitas(year: int) -> pd.DataFrame:
     return df
 
 
+def _norm_city(name: str) -> str:
+    """
+    Robust city-name key: uppercase, strip accents, remove apostrophes /
+    hyphens / extra spaces.  Ensures TSE names like "SANTA BARBARA D OESTE"
+    match GeoJSON names like "SANTA BÁRBARA D'OESTE".
+    """
+    import unicodedata
+    s = str(name).upper().strip()
+    # Remove accents
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    # Drop apostrophes and hyphens, collapse spaces
+    s = s.replace("'", "").replace("-", " ")
+    s = " ".join(s.split())
+    return s
+
+
 @st.cache_data(show_spinner=False)
 def load_municipios_geo():
     """Return (properties_df, raw_geojson_dict) — no geopandas required."""
@@ -163,7 +180,7 @@ def load_municipios_geo():
             "feat_idx": i,
             "NM_MUNICIPIO": p.get("NM_MUNICIPIO", ""),
             "CD_MUNICIPIO": p.get("CD_MUNICIPIO", ""),
-            "NM_UPPER": p.get("NM_MUNICIPIO", "").upper().strip(),
+            "NM_UPPER": _norm_city(p.get("NM_MUNICIPIO", "")),
         })
     return pd.DataFrame(rows), geojson
 
@@ -177,7 +194,7 @@ def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS"
     """
     props_df, geojson = load_municipios_geo()
     agg_mun = agg_mun.copy()
-    agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
+    agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].apply(_norm_city)
     # Drop NM_MUNICIPIO from agg_mun to avoid _x/_y suffix collision on merge
     # (props_df already carries NM_MUNICIPIO)
     agg_mun = agg_mun.drop(columns=["NM_MUNICIPIO"], errors="ignore")
