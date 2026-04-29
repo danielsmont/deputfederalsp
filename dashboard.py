@@ -151,38 +151,45 @@ def load_receitas(year: int) -> pd.DataFrame:
     return df
 
 
+import unicodedata as _ucd
+
 def _norm_city(name: str) -> str:
     """
     Robust city-name key: uppercase, strip accents, apostrophes, hyphens,
     extra spaces, and known TSE/IBGE spelling divergences (e.g. LUÍS→LUIZ).
     """
-    import unicodedata
     s = str(name).upper().strip()
-    # Remove accents
-    s = unicodedata.normalize("NFD", s)
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    # Replace apostrophes (straight and curly) and hyphens with spaces
-    s = s.replace("'", " ").replace("\u2019", " ").replace("-", " ")
-    # Collapse whitespace
+    s = _ucd.normalize("NFD", s)
+    s = "".join(c for c in s if _ucd.category(c) != "Mn")
+    s = s.replace("'", " ").replace("\u2019", " ").replace("\u02bc", " ").replace("-", " ")
     s = " ".join(s.split())
-    # TSE uses "LUIS" for cities where IBGE/GeoJSON uses "LUIZ" (e.g. São Luís→Luiz)
     parts = ["LUIZ" if p == "LUIS" else p for p in s.split()]
     return " ".join(parts)
 
 
 @st.cache_data(show_spinner=False)
 def load_municipios_geo():
-    """Return (properties_df, raw_geojson_dict) — no geopandas required."""
+    """Return (properties_df, raw_geojson_dict) — no geopandas required.
+    NM_UPPER is built inline so any norm change invalidates the cache automatically."""
     with open(GEO, encoding="utf-8") as f:
         geojson = json.load(f)
     rows = []
     for i, feature in enumerate(geojson["features"]):
-        p = feature["properties"]
+        p   = feature["properties"]
+        raw = p.get("NM_MUNICIPIO", "")
+        # ── inline normalisation (mirrors _norm_city exactly) ──────────────
+        s = raw.upper().strip()
+        s = _ucd.normalize("NFD", s)
+        s = "".join(c for c in s if _ucd.category(c) != "Mn")
+        s = s.replace("'", " ").replace("\u2019", " ").replace("\u02bc", " ").replace("-", " ")
+        s = " ".join(s.split())
+        s = " ".join(["LUIZ" if w == "LUIS" else w for w in s.split()])
+        # ───────────────────────────────────────────────────────────────────
         rows.append({
-            "feat_idx": i,
-            "NM_MUNICIPIO": p.get("NM_MUNICIPIO", ""),
+            "feat_idx":    i,
+            "NM_MUNICIPIO": raw,
             "CD_MUNICIPIO": p.get("CD_MUNICIPIO", ""),
-            "NM_UPPER": _norm_city(p.get("NM_MUNICIPIO", "")),
+            "NM_UPPER":    s,
         })
     return pd.DataFrame(rows), geojson
 
@@ -1047,30 +1054,28 @@ with tab_cpv_mun:
             .rename(columns={"QT_VOTOS_NOMINAIS": "VOTOS_CIDADE"})
         )
 
-        # Weighted-average CPV only for candidates who have CPV data
+        # Weighted-average CPV — fully vectorised (no groupby.apply)
         _votos_cpv = _votos_all_mun[
             _votos_all_mun["NR_CANDIDATO"].isin(resumo_cpv_mun["NR_CANDIDATO"])
         ].merge(
             resumo_cpv_mun[["NR_CANDIDATO", "CUSTO_POR_VOTO"]],
             on="NR_CANDIDATO", how="inner",
         )
-        _votos_cpv = _votos_cpv[_votos_cpv["QT_VOTOS_NOMINAIS"] > 0]
-
-        # Vote-weighted average CPV per municipality
-        def _wavg_cpv(g):
-            total = g["QT_VOTOS_NOMINAIS"].sum()
-            if total == 0:
-                return np.nan
-            return np.average(g["CUSTO_POR_VOTO"], weights=g["QT_VOTOS_NOMINAIS"])
-
-        _cpv_mun = (
+        _votos_cpv = _votos_cpv[_votos_cpv["QT_VOTOS_NOMINAIS"] > 0].copy()
+        _votos_cpv["_WEIGHTED"] = _votos_cpv["QT_VOTOS_NOMINAIS"] * _votos_cpv["CUSTO_POR_VOTO"]
+        _cpv_agg = (
             _votos_cpv.groupby("NM_MUNICIPIO")
-            .apply(_wavg_cpv, include_groups=False)
+            .agg(_SUM_W=("_WEIGHTED", "sum"), _SUM_V=("QT_VOTOS_NOMINAIS", "sum"))
             .reset_index()
         )
-        _cpv_mun.columns = ["NM_MUNICIPIO", "CPV_MEDIO"]
-        _cpv_mun["CPV_MEDIO"] = _cpv_mun["CPV_MEDIO"].round(2)
-        _cpv_mun = _cpv_mun.merge(_tot_city, on="NM_MUNICIPIO", how="right")  # keep all cities
+        _cpv_agg["CPV_MEDIO"] = (_cpv_agg["_SUM_W"] / _cpv_agg["_SUM_V"]).round(2)
+
+        # Merge: right-join on tot_city keeps every city; fillna(0) for cities
+        # with no CPV-data candidates (should be none with full unfiltered data)
+        _cpv_mun = _tot_city.merge(
+            _cpv_agg[["NM_MUNICIPIO", "CPV_MEDIO"]], on="NM_MUNICIPIO", how="left"
+        )
+        _cpv_mun["CPV_MEDIO"] = _cpv_mun["CPV_MEDIO"].fillna(0)
 
         n_with_cpv   = _cpv_mun["CPV_MEDIO"].notna().sum()
         n_no_cpv     = _cpv_mun["CPV_MEDIO"].isna().sum()
