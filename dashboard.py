@@ -2,7 +2,7 @@
 São Paulo – Deputado Federal 2018 & 2022
 Dashboard de Análise Eleitoral
 """
-import os, json, copy, warnings
+import os, json, warnings
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -188,28 +188,23 @@ def load_municipios_geo():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS",
-                     fill_zero: bool = True):
+def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS"):
     """
     Join vote/metric data to GeoJSON purely with pandas+json (no geopandas).
     Returns (merged_df, annotated_geojson) ready for px.choropleth_mapbox.
     Use locations='feat_idx', featureidkey='properties.feat_idx'.
-
-    fill_zero=True  → missing cities get 0 (good for vote counts)
-    fill_zero=False → missing cities stay NaN (good for CPV: plotly shows them grey)
     """
-    props_df, geojson_src = load_municipios_geo()
-    # Deep-copy so we never mutate the cached dict
-    geojson = copy.deepcopy(geojson_src)
+    props_df, geojson = load_municipios_geo()
     agg_mun = agg_mun.copy()
     agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].apply(_norm_city)
     # Drop NM_MUNICIPIO from agg_mun to avoid _x/_y suffix collision on merge
     # (props_df already carries NM_MUNICIPIO)
     agg_mun = agg_mun.drop(columns=["NM_MUNICIPIO"], errors="ignore")
     merged = props_df.merge(agg_mun, on="NM_UPPER", how="left")
-    if fill_zero and value_col in merged.columns:
+    if value_col in merged.columns:
         merged[value_col] = merged[value_col].fillna(0)
     # Stamp feat_idx into each GeoJSON feature so plotly can match rows
+    # (mutation is idempotent — same index every call)
     for _, row in merged.iterrows():
         geojson["features"][int(row["feat_idx"])]["properties"]["feat_idx"] = int(row["feat_idx"])
     return merged, geojson
@@ -1086,8 +1081,7 @@ with tab_cpv_mun:
         _cpv_clean = remove_outliers_iqr(_cpv_mun.dropna(subset=["CPV_MEDIO"]), "CPV_MEDIO", k=3)
         _vmax = _cpv_clean["CPV_MEDIO"].quantile(0.95) if not _cpv_clean.empty else 100
 
-        # fill_zero=False keeps NaN → plotly renders those cities grey automatically
-        merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO", fill_zero=False)
+        merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO")
 
         fig = px.choropleth_mapbox(
             merged_cpv,
