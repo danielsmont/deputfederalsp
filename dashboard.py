@@ -81,6 +81,19 @@ def load_resumo(year: int) -> pd.DataFrame:
     )
     # Spectrum
     df["ESPECTRO"] = df["SG_PARTIDO"].map(SPECTRUM).fillna("Centro")
+    # Incumbent status
+    if "DS_OCUPACAO" in df.columns:
+        def _mandato(ocup):
+            o = str(ocup).upper()
+            if "DEPUTADO FEDERAL" in o:
+                return "Reeleição"
+            elif "DEPUTADO ESTADUAL" in o or "DEPUTADO DISTRITAL" in o:
+                return "Dep. Estadual"
+            else:
+                return "Sem mandato"
+        df["MANDATO_ANTERIOR"] = df["DS_OCUPACAO"].apply(_mandato)
+    else:
+        df["MANDATO_ANTERIOR"] = "Sem mandato"
     # Age
     if "DT_NASCIMENTO" in df.columns:
         df["DT_NASCIMENTO"] = pd.to_datetime(df["DT_NASCIMENTO"], format="%d/%m/%Y", errors="coerce")
@@ -229,6 +242,9 @@ with st.sidebar:
 
     status_sel = st.multiselect("Status", STATUS_ORDER, default=[], placeholder="Todos")
 
+    MANDATO_ORDER = ["Reeleição", "Dep. Estadual", "Sem mandato"]
+    mandato_sel = st.multiselect("Mandato anterior", MANDATO_ORDER, default=[], placeholder="Todos")
+
     _max_votos = int(resumo_sel["QT_VOTOS_NOMINAIS"].max()) if "QT_VOTOS_NOMINAIS" in resumo_sel.columns else 500_000
     min_votos = st.number_input(
         "Mínimo de votos", min_value=0, max_value=_max_votos,
@@ -244,6 +260,8 @@ with st.sidebar:
     if age_sel and "FAIXA_ETARIA" in _cand_pool.columns:
         _cand_pool = _cand_pool[_cand_pool["FAIXA_ETARIA"].isin(age_sel)]
     if status_sel:   _cand_pool = _cand_pool[_cand_pool["STATUS"].isin(status_sel)]
+    if mandato_sel and "MANDATO_ANTERIOR" in _cand_pool.columns:
+        _cand_pool = _cand_pool[_cand_pool["MANDATO_ANTERIOR"].isin(mandato_sel)]
     _cand_pool = _cand_pool[pd.to_numeric(_cand_pool["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0) >= min_votos]
     _cand_pool = _cand_pool.sort_values("QT_VOTOS_NOMINAIS", ascending=False)
     _nm_col = "NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in _cand_pool.columns else "NM_CANDIDATO"
@@ -277,6 +295,8 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     if age_sel and "FAIXA_ETARIA" in df.columns:
         df = df[df["FAIXA_ETARIA"].isin(age_sel)]
     if status_sel:   df = df[df["STATUS"].isin(status_sel)]
+    if mandato_sel and "MANDATO_ANTERIOR" in df.columns:
+        df = df[df["MANDATO_ANTERIOR"].isin(mandato_sel)]
     if "QT_VOTOS_NOMINAIS" in df.columns:
         df = df[pd.to_numeric(df["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0) >= min_votos]
     if _cand_nr_sel: df = df[df["NR_CANDIDATO"].isin(_cand_nr_sel)]
@@ -324,9 +344,10 @@ todos os gráficos se atualizam simultaneamente.
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 tabs = st.tabs(["🗺️ Mapa de Votação", "💰 Custo por Voto", "📊 Finanças",
-                "📋 Consolidado", "⚖️ 2018 vs 2022"])
+                "📋 Consolidado", "⚖️ 2018 vs 2022",
+                "🏙️ Por Município", "💸 CPV por Município"])
 
-tab_map, tab_cpv, tab_fin, tab_cons, tab_cmp = tabs
+tab_map, tab_cpv, tab_fin, tab_cons, tab_cmp, tab_mun, tab_cpv_mun = tabs
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -880,5 +901,194 @@ with tab_cmp:
                     "Gastos 2022 (R$)": "R$ {:,.0f}",
                     "R$/voto 2022": "R$ {:.2f}",
                 }, na_rep="—"),
+                use_container_width=True, hide_index=True,
+            )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 6 – POR MUNICÍPIO
+# ════════════════════════════════════════════════════════════════════════════
+with tab_mun:
+    st.header(f"Resultado por Município – {year_sel}")
+
+    _votos_mun = load_votos_muni_cand(year_sel)
+    _cidades = sorted(_votos_mun["NM_MUNICIPIO"].dropna().unique())
+    cidade_sel = st.selectbox("Município", _cidades, index=_cidades.index("SAO PAULO") if "SAO PAULO" in _cidades else 0)
+
+    resumo_mun = apply_filters(resumo_sel)
+    _nm_col_m = "NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in resumo_mun.columns else "NM_CANDIDATO"
+
+    # Votes in the selected city for filtered candidates
+    _city_votes = (
+        _votos_mun[
+            (_votos_mun["NM_MUNICIPIO"] == cidade_sel) &
+            (_votos_mun["NR_CANDIDATO"].isin(resumo_mun["NR_CANDIDATO"]))
+        ]
+        .groupby("NR_CANDIDATO")["QT_VOTOS_NOMINAIS"].sum()
+        .reset_index()
+    )
+
+    # Join with resumo for candidate metadata
+    _city_df = _city_votes.merge(
+        resumo_mun[["NR_CANDIDATO", _nm_col_m, "SG_PARTIDO", "ESPECTRO",
+                    "STATUS", "MANDATO_ANTERIOR", "QT_VOTOS_NOMINAIS",
+                    "CUSTO_POR_VOTO", "TOTAL_DESPESAS"]].rename(
+            columns={"QT_VOTOS_NOMINAIS": "VOTOS_TOTAL_SP"}
+        ),
+        on="NR_CANDIDATO", how="left",
+    ).sort_values("QT_VOTOS_NOMINAIS", ascending=False)
+
+    _city_total = _city_df["QT_VOTOS_NOMINAIS"].sum()
+    _city_df["PCT_CIDADE"] = (_city_df["QT_VOTOS_NOMINAIS"] / _city_total * 100).round(2) if _city_total > 0 else 0.0
+
+    if _city_df.empty:
+        st.info("Nenhum candidato com votos neste município para os filtros selecionados.")
+    else:
+        # KPIs
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Candidatos com votos", len(_city_df))
+        k2.metric("Total de votos no município", f"{int(_city_total):,}")
+        k3.metric("Eleitos com votos aqui", int((_city_df["STATUS"] == "Eleito").sum()))
+
+        st.divider()
+
+        # Bar chart – top candidates by votes in city
+        _top_n = st.slider("Mostrar top N candidatos", 10, min(100, len(_city_df)), 20, key="mun_topn")
+        _bar_df = _city_df.head(_top_n).copy()
+        _bar_df["LABEL"] = _bar_df[_nm_col_m].str.title() + " (" + _bar_df["SG_PARTIDO"] + ")"
+        fig = px.bar(
+            _bar_df.sort_values("QT_VOTOS_NOMINAIS"),
+            x="QT_VOTOS_NOMINAIS", y="LABEL",
+            color="STATUS",
+            color_discrete_map=STATUS_COLORS,
+            orientation="h",
+            text="QT_VOTOS_NOMINAIS",
+            hover_data={"ESPECTRO": True, "MANDATO_ANTERIOR": True,
+                        "PCT_CIDADE": ":.2f", "VOTOS_TOTAL_SP": ":,"},
+            labels={
+                "QT_VOTOS_NOMINAIS": "Votos no município",
+                "LABEL": "",
+                "PCT_CIDADE": "% dos votos na cidade",
+                "VOTOS_TOTAL_SP": "Votos totais SP",
+                "MANDATO_ANTERIOR": "Mandato anterior",
+            },
+            title=f"Votos por candidato – {cidade_sel.title()} ({year_sel})",
+        )
+        fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+        fig.update_layout(height=max(400, _top_n * 28), showlegend=True, yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Full table
+        st.subheader("Tabela completa")
+        _disp = _city_df[[_nm_col_m, "SG_PARTIDO", "ESPECTRO", "STATUS",
+                           "MANDATO_ANTERIOR", "QT_VOTOS_NOMINAIS",
+                           "PCT_CIDADE", "VOTOS_TOTAL_SP",
+                           "CUSTO_POR_VOTO", "TOTAL_DESPESAS"]].copy()
+        _disp.columns = ["Candidato", "Partido", "Espectro", "Status",
+                         "Mandato anterior", "Votos no mun.", "% da cidade",
+                         "Votos totais SP", "R$/voto", "Gastos (R$)"]
+        st.dataframe(
+            _disp.style.format({
+                "Votos no mun.":   "{:,.0f}",
+                "% da cidade":     "{:.2f}%",
+                "Votos totais SP": "{:,.0f}",
+                "R$/voto":         lambda v: f"R$ {v:,.2f}" if pd.notna(v) else "—",
+                "Gastos (R$)":     lambda v: f"R$ {v:,.0f}" if pd.notna(v) else "—",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 7 – CPV POR MUNICÍPIO (mapa)
+# ════════════════════════════════════════════════════════════════════════════
+with tab_cpv_mun:
+    st.header(f"Custo médio ponderado por voto — por município – {year_sel}")
+    st.caption(
+        "Para cada município, calcula a média do custo por voto dos candidatos "
+        "ponderada pelo número de votos que cada um recebeu naquele município. "
+        "Reflete quanto custou, em média, cada voto depositado na cidade."
+    )
+
+    resumo_cpv_mun = apply_filters(resumo_sel).dropna(subset=["CUSTO_POR_VOTO"])
+
+    if resumo_cpv_mun.empty:
+        st.info("Sem dados para os filtros selecionados.")
+    else:
+        _votos_cpv = load_votos_muni_cand(year_sel)
+        _votos_cpv = _votos_cpv[_votos_cpv["NR_CANDIDATO"].isin(resumo_cpv_mun["NR_CANDIDATO"])]
+        _votos_cpv = _votos_cpv.merge(
+            resumo_cpv_mun[["NR_CANDIDATO", "CUSTO_POR_VOTO"]],
+            on="NR_CANDIDATO", how="inner",
+        )
+        _votos_cpv = _votos_cpv[_votos_cpv["QT_VOTOS_NOMINAIS"] > 0].dropna(subset=["CUSTO_POR_VOTO"])
+
+        # Vote-weighted average CPV per municipality
+        def _wavg_cpv(g):
+            total = g["QT_VOTOS_NOMINAIS"].sum()
+            if total == 0:
+                return np.nan
+            return np.average(g["CUSTO_POR_VOTO"], weights=g["QT_VOTOS_NOMINAIS"])
+
+        _cpv_mun = (
+            _votos_cpv.groupby("NM_MUNICIPIO")
+            .apply(_wavg_cpv, include_groups=False)
+            .reset_index()
+        )
+        _cpv_mun.columns = ["NM_MUNICIPIO", "CPV_MEDIO"]
+        _cpv_mun["CPV_MEDIO"] = _cpv_mun["CPV_MEDIO"].round(2)
+
+        # Also keep total votes per city for hover
+        _tot_city = (
+            _votos_cpv.groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum().reset_index()
+            .rename(columns={"QT_VOTOS_NOMINAIS": "VOTOS_CIDADE"})
+        )
+        _cpv_mun = _cpv_mun.merge(_tot_city, on="NM_MUNICIPIO", how="left")
+
+        # Remove extreme outliers for colour scale legibility
+        _cpv_mun_clean = remove_outliers_iqr(_cpv_mun.dropna(subset=["CPV_MEDIO"]), "CPV_MEDIO", k=3)
+        _vmax = _cpv_mun_clean["CPV_MEDIO"].quantile(0.95)
+
+        merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO")
+
+        fig = px.choropleth_mapbox(
+            merged_cpv,
+            geojson=geojson_cpv,
+            locations="feat_idx",
+            featureidkey="properties.feat_idx",
+            color="CPV_MEDIO",
+            color_continuous_scale="RdYlGn_r",
+            range_color=[0, _vmax],
+            mapbox_style="carto-positron",
+            zoom=6, center={"lat": -22.5, "lon": -48.5},
+            opacity=0.8,
+            hover_data={"NM_MUNICIPIO": True, "CPV_MEDIO": ":.2f", "VOTOS_CIDADE": ":,"},
+            labels={"CPV_MEDIO": "R$/voto médio", "VOTOS_CIDADE": "Votos contados",
+                    "NM_MUNICIPIO": "Município"},
+            title=f"Custo médio ponderado por voto por município – {year_sel}",
+        )
+        fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, height=600)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Top / bottom table
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🔴 Municípios mais caros (top 15)")
+            _top = _cpv_mun.dropna(subset=["CPV_MEDIO"]).sort_values("CPV_MEDIO", ascending=False).head(15)
+            st.dataframe(
+                _top[["NM_MUNICIPIO", "CPV_MEDIO", "VOTOS_CIDADE"]].rename(
+                    columns={"NM_MUNICIPIO": "Município", "CPV_MEDIO": "R$/voto médio",
+                             "VOTOS_CIDADE": "Votos"}
+                ).style.format({"R$/voto médio": "R$ {:.2f}", "Votos": "{:,.0f}"}),
+                use_container_width=True, hide_index=True,
+            )
+        with c2:
+            st.subheader("🟢 Municípios mais eficientes (top 15)")
+            _bot = _cpv_mun.dropna(subset=["CPV_MEDIO"]).sort_values("CPV_MEDIO").head(15)
+            st.dataframe(
+                _bot[["NM_MUNICIPIO", "CPV_MEDIO", "VOTOS_CIDADE"]].rename(
+                    columns={"NM_MUNICIPIO": "Município", "CPV_MEDIO": "R$/voto médio",
+                             "VOTOS_CIDADE": "Votos"}
+                ).style.format({"R$/voto médio": "R$ {:.2f}", "Votos": "{:,.0f}"}),
                 use_container_width=True, hide_index=True,
             )
