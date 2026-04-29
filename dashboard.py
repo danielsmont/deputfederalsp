@@ -378,18 +378,17 @@ with tab_cpv:
         st.info("Sem dados para os filtros selecionados.")
     else:
         # ── Scatter ──────────────────────────────────────────────────────────
-        st.subheader("Votos vs. Gastos")
+        st.subheader("Votos vs. Custo por Voto")
         scatter_df = remove_outliers_iqr(resumo.dropna(subset=["CUSTO_POR_VOTO"]), "CUSTO_POR_VOTO")
         scatter_df["NM_LABEL"] = scatter_df["NM_URNA_CANDIDATO"] if "NM_URNA_CANDIDATO" in scatter_df.columns else scatter_df["NM_CANDIDATO"]
         fig = px.scatter(
-            scatter_df, x="QT_VOTOS_NOMINAIS", y="TOTAL_DESPESAS",
+            scatter_df, x="QT_VOTOS_NOMINAIS", y="CUSTO_POR_VOTO",
             color="ESPECTRO", symbol="STATUS",
             color_discrete_map=SPECTRUM_COLORS,
             size="QT_VOTOS_NOMINAIS", size_max=30,
             hover_name="NM_LABEL",
-            hover_data={"SG_PARTIDO": True, "CUSTO_POR_VOTO": ":.2f",
-                        "QT_VOTOS_NOMINAIS": ":,", "TOTAL_DESPESAS": ":,.0f",
-                        "ESPECTRO": False},
+            hover_data={"SG_PARTIDO": True, "TOTAL_DESPESAS": ":,.0f",
+                        "QT_VOTOS_NOMINAIS": ":,", "ESPECTRO": False},
             labels={
                 "QT_VOTOS_NOMINAIS": "Votos nominais",
                 "TOTAL_DESPESAS": "Gastos (R$)",
