@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import geopandas as gpd
 
 warnings.filterwarnings("ignore")
 
@@ -133,13 +132,40 @@ def load_receitas(year: int) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_municipios_geo():
-    gdf = gpd.read_file(GEO)
-    # Normalise name for join: upper, strip accents handled by string match
-    gdf["NM_UPPER"] = gdf["NM_MUNICIPIO"].str.upper().str.strip()
-    return gdf
+    """Return (properties_df, raw_geojson_dict) — no geopandas required."""
+    with open(GEO, encoding="utf-8") as f:
+        geojson = json.load(f)
+    rows = []
+    for i, feature in enumerate(geojson["features"]):
+        p = feature["properties"]
+        rows.append({
+            "feat_idx": i,
+            "NM_MUNICIPIO": p.get("NM_MUNICIPIO", ""),
+            "CD_MUNICIPIO": p.get("CD_MUNICIPIO", ""),
+            "NM_UPPER": p.get("NM_MUNICIPIO", "").upper().strip(),
+        })
+    return pd.DataFrame(rows), geojson
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def build_choropleth(agg_mun: pd.DataFrame, color_scale: str = "YlOrRd"):
+    """
+    Join vote data to GeoJSON purely with pandas+json (no geopandas).
+    Returns (merged_df, annotated_geojson) ready for px.choropleth_mapbox.
+    locations='feat_idx', featureidkey='properties.feat_idx'
+    """
+    props_df, geojson = load_municipios_geo()
+    agg_mun = agg_mun.copy()
+    agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
+    merged = props_df.merge(agg_mun[["NM_UPPER", "QT_VOTOS_NOMINAIS"]],
+                            on="NM_UPPER", how="left")
+    merged["QT_VOTOS_NOMINAIS"] = merged["QT_VOTOS_NOMINAIS"].fillna(0)
+    # Stamp feat_idx into each GeoJSON feature so plotly can match rows
+    for _, row in merged.iterrows():
+        geojson["features"][int(row["feat_idx"])]["properties"]["feat_idx"] = int(row["feat_idx"])
+    return merged, geojson
+
+
 def fmt_brl(v):
     if pd.isna(v): return "—"
     if abs(v) >= 1_000_000: return f"R$ {v/1_000_000:.1f}M"
@@ -263,12 +289,8 @@ with tab_map:
         )
         map_title = f"Total de votos nominais por município – {year_sel}"
 
-    # Join to GeoJSON
-    gdf = load_municipios_geo()
-    agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
-    merged = gdf.merge(agg_mun, on="NM_UPPER", how="left")
-    merged["QT_VOTOS_NOMINAIS"] = merged["QT_VOTOS_NOMINAIS"].fillna(0)
-    geojson = json.loads(merged.to_json())
+    # Join to GeoJSON (pure pandas+json, no geopandas)
+    merged, geojson = build_choropleth(agg_mun)
 
     if merged["QT_VOTOS_NOMINAIS"].sum() == 0:
         st.info("Nenhum dado de votos para este filtro.")
@@ -276,7 +298,8 @@ with tab_map:
         fig = px.choropleth_mapbox(
             merged,
             geojson=geojson,
-            locations=merged.index,
+            locations="feat_idx",
+            featureidkey="properties.feat_idx",
             color="QT_VOTOS_NOMINAIS",
             color_continuous_scale="YlOrRd",
             mapbox_style="carto-positron",
@@ -597,18 +620,14 @@ with tab_cons:
         fig.update_layout(showlegend=False, height=350)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Row 6: Aggregate map (all candidates filtered)
+        # Row 6: Aggregate map
         st.subheader("Mapa agregado de votação")
-        # Use pre-aggregated file (no per-candidate filter applied here for performance)
-        agg_mun = load_votos_municipio_agregado(year_sel)[["NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"]]
-        gdf = load_municipios_geo()
-        agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
-        merged = gdf.merge(agg_mun, on="NM_UPPER", how="left")
-        merged["QT_VOTOS_NOMINAIS"] = merged["QT_VOTOS_NOMINAIS"].fillna(0)
-        if merged["QT_VOTOS_NOMINAIS"].sum() > 0:
-            geojson = json.loads(merged.to_json())
+        agg_mun_map = load_votos_municipio_agregado(year_sel)[["NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"]]
+        merged_map, geojson_map = build_choropleth(agg_mun_map)
+        if merged_map["QT_VOTOS_NOMINAIS"].sum() > 0:
             fig = px.choropleth_mapbox(
-                merged, geojson=geojson, locations=merged.index,
+                merged_map, geojson=geojson_map,
+                locations="feat_idx", featureidkey="properties.feat_idx",
                 color="QT_VOTOS_NOMINAIS",
                 color_continuous_scale="Blues",
                 mapbox_style="carto-positron",
