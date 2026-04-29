@@ -439,14 +439,12 @@ with tab_map:
         fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, height=600)
         st.plotly_chart(fig, use_container_width=True)
 
-        top10 = agg_mun.sort_values(color_col, ascending=False).head(10).copy()
-        top10_disp = top10[["NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"]].rename(
-            columns={"NM_MUNICIPIO": "Município", "QT_VOTOS_NOMINAIS": "Votos"}
-        )
+        all_mun_disp = agg_mun.sort_values(color_col, ascending=False).copy()
+        all_mun_disp = all_mun_disp.rename(columns={"NM_MUNICIPIO": "Município", "QT_VOTOS_NOMINAIS": "Votos"})
         if color_col == "PCT":
-            top10_disp["% no mun."] = top10["PCT"].map("{:.1f}%".format)
-        st.subheader("Top 10 municípios")
-        st.dataframe(top10_disp.reset_index(drop=True), hide_index=True, use_container_width=True)
+            all_mun_disp["% no mun."] = all_mun_disp["PCT"].map("{:.1f}%".format)
+        st.subheader(f"Municípios ({len(all_mun_disp)})")
+        st.dataframe(all_mun_disp.reset_index(drop=True), hide_index=True, use_container_width=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
