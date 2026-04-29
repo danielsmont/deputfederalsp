@@ -1047,14 +1047,22 @@ with tab_cpv_mun:
     else:
         _votos_all_mun = load_votos_muni_cand(year_sel)
 
-        # Total votes per city from ALL filtered candidates (for hover)
-        _tot_city = (
+        # ── Base: ALL 645 cities so filtered-out ones show as grey ────────────
+        _all_cities_df = _votos_all_mun[["NM_MUNICIPIO"]].drop_duplicates()
+
+        # Votes per city from filtered candidates (0 if no filtered candidates got votes there)
+        _tot_city_filt = (
             _votos_all_mun[_votos_all_mun["NR_CANDIDATO"].isin(_resumo_all_filt["NR_CANDIDATO"])]
             .groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum().reset_index()
             .rename(columns={"QT_VOTOS_NOMINAIS": "VOTOS_CIDADE"})
         )
+        _tot_city = (
+            _all_cities_df
+            .merge(_tot_city_filt, on="NM_MUNICIPIO", how="left")
+        )
+        _tot_city["VOTOS_CIDADE"] = _tot_city["VOTOS_CIDADE"].fillna(0).astype(int)
 
-        # Weighted-average CPV — fully vectorised (no groupby.apply)
+        # ── Weighted-average CPV — fully vectorised ───────────────────────────
         _votos_cpv = _votos_all_mun[
             _votos_all_mun["NR_CANDIDATO"].isin(resumo_cpv_mun["NR_CANDIDATO"])
         ].merge(
@@ -1070,50 +1078,94 @@ with tab_cpv_mun:
         )
         _cpv_agg["CPV_MEDIO"] = (_cpv_agg["_SUM_W"] / _cpv_agg["_SUM_V"]).round(2)
 
-        # Merge: right-join on tot_city keeps every city; fillna(0) for cities
-        # with no CPV-data candidates (should be none with full unfiltered data)
+        # ── Final city table: all 645 cities, NaN CPV where no filtered votes ─
         _cpv_mun = _tot_city.merge(
             _cpv_agg[["NM_MUNICIPIO", "CPV_MEDIO"]], on="NM_MUNICIPIO", how="left"
         )
-        _cpv_mun["CPV_MEDIO"] = _cpv_mun["CPV_MEDIO"].fillna(0)
+        # CPV=NaN kept for zero-vote cities — rendered grey in the map below
 
-        n_with_cpv   = _cpv_mun["CPV_MEDIO"].notna().sum()
-        n_no_cpv     = _cpv_mun["CPV_MEDIO"].isna().sum()
-        st.caption(
-            f"**{n_with_cpv}** municípios com dados de CPV | "
-            f"**{n_no_cpv}** sem dados financeiros disponíveis (exibidos em cinza)"
+        # ── Colour scale clipped to 95th pct of cities with actual data ───────
+        _data_rows = _cpv_mun[_cpv_mun["VOTOS_CIDADE"] > 0]["CPV_MEDIO"].dropna()
+        _cpv_clean = remove_outliers_iqr(
+            _cpv_mun[_cpv_mun["VOTOS_CIDADE"] > 0].dropna(subset=["CPV_MEDIO"]).copy(),
+            "CPV_MEDIO", k=3,
         )
+        _vmax = float(_cpv_clean["CPV_MEDIO"].quantile(0.95)) if not _cpv_clean.empty else 100.0
 
-        # Remove extreme outliers for colour scale legibility (only from cities with data)
-        _cpv_clean = remove_outliers_iqr(_cpv_mun.dropna(subset=["CPV_MEDIO"]), "CPV_MEDIO", k=3)
-        _vmax = _cpv_clean["CPV_MEDIO"].quantile(0.95) if not _cpv_clean.empty else 100
-
+        # ── Build merged GeoJSON frame ────────────────────────────────────────
         merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO")
 
-        fig = px.choropleth_mapbox(
-            merged_cpv,
-            geojson=geojson_cpv,
-            locations="feat_idx",
-            featureidkey="properties.feat_idx",
-            color="CPV_MEDIO",
-            color_continuous_scale="RdYlGn_r",
-            range_color=[0, _vmax],
-            mapbox_style="carto-positron",
-            zoom=6, center={"lat": -22.5, "lon": -48.5},
-            opacity=0.8,
-            hover_data={"NM_MUNICIPIO": True, "CPV_MEDIO": ":.2f", "VOTOS_CIDADE": ":,"},
-            labels={"CPV_MEDIO": "R$/voto médio", "VOTOS_CIDADE": "Votos contados",
-                    "NM_MUNICIPIO": "Município"},
-            title=f"Custo médio ponderado por voto por município – {year_sel}",
+        _has_data = merged_cpv[merged_cpv["VOTOS_CIDADE"] > 0].copy()
+        _no_data  = merged_cpv[merged_cpv["VOTOS_CIDADE"] == 0].copy()
+
+        n_com = len(_has_data)
+        n_sem = len(_no_data)
+        st.caption(
+            f"**{n_com}** municípios com votos para o filtro selecionado  |  "
+            f"**{n_sem}** sem votos (em cinza)"
         )
-        fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, height=600)
+
+        # ── Two-trace choropleth: grey layer + coloured layer ─────────────────
+        fig = go.Figure()
+
+        if len(_no_data) > 0:
+            fig.add_trace(go.Choroplethmapbox(
+                geojson=geojson_cpv,
+                locations=_no_data["feat_idx"].tolist(),
+                z=[0] * len(_no_data),
+                featureidkey="properties.feat_idx",
+                colorscale=[[0, "#cccccc"], [1, "#cccccc"]],
+                showscale=False,
+                marker_opacity=0.7,
+                marker_line_width=0.5,
+                marker_line_color="white",
+                name="Sem votos",
+                customdata=_no_data["NM_MUNICIPIO"].tolist(),
+                hovertemplate="<b>%{customdata}</b><br>Sem votos para o filtro selecionado<extra></extra>",
+            ))
+
+        if len(_has_data) > 0:
+            fig.add_trace(go.Choroplethmapbox(
+                geojson=geojson_cpv,
+                locations=_has_data["feat_idx"].tolist(),
+                z=_has_data["CPV_MEDIO"].fillna(0).tolist(),
+                featureidkey="properties.feat_idx",
+                colorscale="RdYlGn_r",
+                zmin=0,
+                zmax=_vmax,
+                colorbar=dict(title="R$/voto", thickness=15),
+                marker_opacity=0.8,
+                marker_line_width=0.5,
+                marker_line_color="white",
+                name="CPV",
+                customdata=np.column_stack([
+                    _has_data["NM_MUNICIPIO"].values,
+                    _has_data["VOTOS_CIDADE"].values,
+                ]),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "R$/voto médio: R$ %{z:.2f}<br>"
+                    "Votos: %{customdata[1]}<extra></extra>"
+                ),
+            ))
+
+        fig.update_layout(
+            mapbox_style="carto-positron",
+            mapbox_zoom=6,
+            mapbox_center={"lat": -22.5, "lon": -48.5},
+            margin={"r": 0, "t": 40, "l": 0, "b": 0},
+            height=600,
+            title_text=f"Custo médio ponderado por voto por município – {year_sel}",
+            showlegend=False,
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Top / bottom table
+        # ── Top / bottom tables (only cities with actual votes) ───────────────
+        _cpv_ranked = _cpv_mun[_cpv_mun["VOTOS_CIDADE"] > 0].dropna(subset=["CPV_MEDIO"])
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("🔴 Municípios mais caros (top 15)")
-            _top = _cpv_mun.dropna(subset=["CPV_MEDIO"]).sort_values("CPV_MEDIO", ascending=False).head(15)
+            _top = _cpv_ranked.sort_values("CPV_MEDIO", ascending=False).head(15)
             st.dataframe(
                 _top[["NM_MUNICIPIO", "CPV_MEDIO", "VOTOS_CIDADE"]].rename(
                     columns={"NM_MUNICIPIO": "Município", "CPV_MEDIO": "R$/voto médio",
@@ -1123,7 +1175,7 @@ with tab_cpv_mun:
             )
         with c2:
             st.subheader("🟢 Municípios mais eficientes (top 15)")
-            _bot = _cpv_mun.dropna(subset=["CPV_MEDIO"]).sort_values("CPV_MEDIO").head(15)
+            _bot = _cpv_ranked.sort_values("CPV_MEDIO").head(15)
             st.dataframe(
                 _bot[["NM_MUNICIPIO", "CPV_MEDIO", "VOTOS_CIDADE"]].rename(
                     columns={"NM_MUNICIPIO": "Município", "CPV_MEDIO": "R$/voto médio",
