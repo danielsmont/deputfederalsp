@@ -2,7 +2,7 @@
 São Paulo – Deputado Federal 2018 & 2022
 Dashboard de Análise Eleitoral
 """
-import os, json, warnings
+import os, json, copy, warnings
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -153,19 +153,21 @@ def load_receitas(year: int) -> pd.DataFrame:
 
 def _norm_city(name: str) -> str:
     """
-    Robust city-name key: uppercase, strip accents, remove apostrophes /
-    hyphens / extra spaces.  Ensures TSE names like "SANTA BARBARA D OESTE"
-    match GeoJSON names like "SANTA BÁRBARA D'OESTE".
+    Robust city-name key: uppercase, strip accents, apostrophes, hyphens,
+    extra spaces, and known TSE/IBGE spelling divergences (e.g. LUÍS→LUIZ).
     """
     import unicodedata
     s = str(name).upper().strip()
     # Remove accents
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    # Replace apostrophes and hyphens with spaces, then collapse
-    s = s.replace("'", " ").replace("'", " ").replace("-", " ")
+    # Replace apostrophes (straight and curly) and hyphens with spaces
+    s = s.replace("'", " ").replace("\u2019", " ").replace("-", " ")
+    # Collapse whitespace
     s = " ".join(s.split())
-    return s
+    # TSE uses "LUIS" for cities where IBGE/GeoJSON uses "LUIZ" (e.g. São Luís→Luiz)
+    parts = ["LUIZ" if p == "LUIS" else p for p in s.split()]
+    return " ".join(parts)
 
 
 @st.cache_data(show_spinner=False)
@@ -186,20 +188,26 @@ def load_municipios_geo():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS"):
+def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS",
+                     fill_zero: bool = True):
     """
     Join vote/metric data to GeoJSON purely with pandas+json (no geopandas).
     Returns (merged_df, annotated_geojson) ready for px.choropleth_mapbox.
     Use locations='feat_idx', featureidkey='properties.feat_idx'.
+
+    fill_zero=True  → missing cities get 0 (good for vote counts)
+    fill_zero=False → missing cities stay NaN (good for CPV: plotly shows them grey)
     """
-    props_df, geojson = load_municipios_geo()
+    props_df, geojson_src = load_municipios_geo()
+    # Deep-copy so we never mutate the cached dict
+    geojson = copy.deepcopy(geojson_src)
     agg_mun = agg_mun.copy()
     agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].apply(_norm_city)
     # Drop NM_MUNICIPIO from agg_mun to avoid _x/_y suffix collision on merge
     # (props_df already carries NM_MUNICIPIO)
     agg_mun = agg_mun.drop(columns=["NM_MUNICIPIO"], errors="ignore")
     merged = props_df.merge(agg_mun, on="NM_UPPER", how="left")
-    if value_col in merged.columns:
+    if fill_zero and value_col in merged.columns:
         merged[value_col] = merged[value_col].fillna(0)
     # Stamp feat_idx into each GeoJSON feature so plotly can match rows
     for _, row in merged.iterrows():
@@ -1027,18 +1035,29 @@ with tab_cpv_mun:
         "Reflete quanto custou, em média, cada voto depositado na cidade."
     )
 
-    resumo_cpv_mun = apply_filters(resumo_sel).dropna(subset=["CUSTO_POR_VOTO"])
+    _resumo_all_filt  = apply_filters(resumo_sel)                          # all filtered candidates
+    resumo_cpv_mun    = _resumo_all_filt.dropna(subset=["CUSTO_POR_VOTO"]) # subset with CPV data
 
-    if resumo_cpv_mun.empty:
+    if _resumo_all_filt.empty:
         st.info("Sem dados para os filtros selecionados.")
     else:
-        _votos_cpv = load_votos_muni_cand(year_sel)
-        _votos_cpv = _votos_cpv[_votos_cpv["NR_CANDIDATO"].isin(resumo_cpv_mun["NR_CANDIDATO"])]
-        _votos_cpv = _votos_cpv.merge(
+        _votos_all_mun = load_votos_muni_cand(year_sel)
+
+        # Total votes per city from ALL filtered candidates (for hover)
+        _tot_city = (
+            _votos_all_mun[_votos_all_mun["NR_CANDIDATO"].isin(_resumo_all_filt["NR_CANDIDATO"])]
+            .groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum().reset_index()
+            .rename(columns={"QT_VOTOS_NOMINAIS": "VOTOS_CIDADE"})
+        )
+
+        # Weighted-average CPV only for candidates who have CPV data
+        _votos_cpv = _votos_all_mun[
+            _votos_all_mun["NR_CANDIDATO"].isin(resumo_cpv_mun["NR_CANDIDATO"])
+        ].merge(
             resumo_cpv_mun[["NR_CANDIDATO", "CUSTO_POR_VOTO"]],
             on="NR_CANDIDATO", how="inner",
         )
-        _votos_cpv = _votos_cpv[_votos_cpv["QT_VOTOS_NOMINAIS"] > 0].dropna(subset=["CUSTO_POR_VOTO"])
+        _votos_cpv = _votos_cpv[_votos_cpv["QT_VOTOS_NOMINAIS"] > 0]
 
         # Vote-weighted average CPV per municipality
         def _wavg_cpv(g):
@@ -1054,19 +1073,21 @@ with tab_cpv_mun:
         )
         _cpv_mun.columns = ["NM_MUNICIPIO", "CPV_MEDIO"]
         _cpv_mun["CPV_MEDIO"] = _cpv_mun["CPV_MEDIO"].round(2)
+        _cpv_mun = _cpv_mun.merge(_tot_city, on="NM_MUNICIPIO", how="right")  # keep all cities
 
-        # Also keep total votes per city for hover
-        _tot_city = (
-            _votos_cpv.groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum().reset_index()
-            .rename(columns={"QT_VOTOS_NOMINAIS": "VOTOS_CIDADE"})
+        n_with_cpv   = _cpv_mun["CPV_MEDIO"].notna().sum()
+        n_no_cpv     = _cpv_mun["CPV_MEDIO"].isna().sum()
+        st.caption(
+            f"**{n_with_cpv}** municípios com dados de CPV | "
+            f"**{n_no_cpv}** sem dados financeiros disponíveis (exibidos em cinza)"
         )
-        _cpv_mun = _cpv_mun.merge(_tot_city, on="NM_MUNICIPIO", how="left")
 
-        # Remove extreme outliers for colour scale legibility
-        _cpv_mun_clean = remove_outliers_iqr(_cpv_mun.dropna(subset=["CPV_MEDIO"]), "CPV_MEDIO", k=3)
-        _vmax = _cpv_mun_clean["CPV_MEDIO"].quantile(0.95)
+        # Remove extreme outliers for colour scale legibility (only from cities with data)
+        _cpv_clean = remove_outliers_iqr(_cpv_mun.dropna(subset=["CPV_MEDIO"]), "CPV_MEDIO", k=3)
+        _vmax = _cpv_clean["CPV_MEDIO"].quantile(0.95) if not _cpv_clean.empty else 100
 
-        merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO")
+        # fill_zero=False keeps NaN → plotly renders those cities grey automatically
+        merged_cpv, geojson_cpv = build_choropleth(_cpv_mun, value_col="CPV_MEDIO", fill_zero=False)
 
         fig = px.choropleth_mapbox(
             merged_cpv,
