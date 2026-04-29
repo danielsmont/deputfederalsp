@@ -426,9 +426,20 @@ with tab_cpv:
                     fig.update_layout(height=380, showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
 
-        # ── Bar: avg cost/vote per party (elected only) ───────────────────────
-        st.subheader("Custo médio por voto — por partido (eleitos)")
-        el = resumo[resumo["ELEITO"]].dropna(subset=["CUSTO_POR_VOTO"])
+        # ── Bar: avg cost/vote per party ─────────────────────────────────────
+        st.subheader("Custo médio por voto — por partido")
+        bar_scope = st.radio(
+            "Escopo (gráfico de barras)",
+            ["Apenas eleitos", "Eleitos e suplentes", "Todos"],
+            horizontal=True, index=0, key="bar_scope_cpv",
+        )
+        if bar_scope == "Apenas eleitos":
+            el = resumo[resumo["ELEITO"]]
+        elif bar_scope == "Eleitos e suplentes":
+            el = resumo[resumo["STATUS"].isin(["Eleito", "Suplente"])]
+        else:
+            el = resumo.copy()
+        el = el.dropna(subset=["CUSTO_POR_VOTO"])
         el = remove_outliers_iqr(el, "CUSTO_POR_VOTO")
         bar_mode = st.radio("Ordenar por", ["Custo/voto", "Partido"], horizontal=True, key="bar_mode_cpv")
         avg_party = el.groupby("SG_PARTIDO")["CUSTO_POR_VOTO"].mean().reset_index()
@@ -438,10 +449,11 @@ with tab_cpv:
         else:
             avg_party = avg_party.sort_values("Partido")
         avg_party["Espectro"] = avg_party["Partido"].map(SPECTRUM).fillna("Centro")
+        scope_label = {"Apenas eleitos": "eleitos", "Eleitos e suplentes": "eleitos + suplentes", "Todos": "todos"}[bar_scope]
         fig = px.bar(
             avg_party, x="Partido", y="Custo/voto (R$)",
             color="Espectro", color_discrete_map=SPECTRUM_COLORS,
-            title=f"Custo médio por voto por partido (eleitos) – {year_sel}",
+            title=f"Custo médio por voto por partido ({scope_label}) – {year_sel}",
         )
         fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
