@@ -307,7 +307,9 @@ with st.sidebar:
     st.caption("Fonte: TSE Dados Abertos")
 
 
-def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
+def apply_filters(df: pd.DataFrame, skip_threshold: bool = False) -> pd.DataFrame:
+    """Apply sidebar filters.  skip_threshold=True omits the min-votes cut
+    so map aggregations always cover every municipality."""
     if parties_sel:  df = df[df["SG_PARTIDO"].isin(parties_sel)]
     if spectra_sel:  df = df[df["ESPECTRO"].isin(spectra_sel)]
     if gender_sel and "DS_GENERO" in df.columns:
@@ -317,7 +319,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     if status_sel:   df = df[df["STATUS"].isin(status_sel)]
     if mandato_sel and "MANDATO_ANTERIOR" in df.columns:
         df = df[df["MANDATO_ANTERIOR"].isin(mandato_sel)]
-    if "QT_VOTOS_NOMINAIS" in df.columns:
+    if not skip_threshold and "QT_VOTOS_NOMINAIS" in df.columns:
         df = df[pd.to_numeric(df["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0) >= min_votos]
     if _cand_nr_sel: df = df[df["NR_CANDIDATO"].isin(_cand_nr_sel)]
     return df
@@ -375,7 +377,7 @@ tab_map, tab_cpv, tab_fin, tab_cons, tab_cmp, tab_mun, tab_cpv_mun = tabs
 # ════════════════════════════════════════════════════════════════════════════
 with tab_map:
     st.header(f"Mapa de Votação – {year_sel}")
-    resumo = apply_filters(resumo_sel)
+    resumo = apply_filters(resumo_sel, skip_threshold=True)
 
     color_mode = st.radio(
         "Cor representa",
@@ -1030,7 +1032,9 @@ with tab_cpv_mun:
         "Reflete quanto custou, em média, cada voto depositado na cidade."
     )
 
-    _resumo_all_filt  = apply_filters(resumo_sel)                          # all filtered candidates
+    # skip_threshold=True so every municipality appears even if its local
+    # candidates are below the sidebar vote-minimum
+    _resumo_all_filt  = apply_filters(resumo_sel, skip_threshold=True)
     resumo_cpv_mun    = _resumo_all_filt.dropna(subset=["CUSTO_POR_VOTO"]) # subset with CPV data
 
     if _resumo_all_filt.empty:
