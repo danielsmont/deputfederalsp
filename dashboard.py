@@ -283,6 +283,45 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── Descritivo ───────────────────────────────────────────────────────────────
+with st.expander("ℹ️ Como usar esta ferramenta para planejamento eleitoral", expanded=False):
+    st.markdown("""
+Esta plataforma reúne dados das eleições de **Deputado Federal por São Paulo em 2018 e 2022** (TSE Dados Abertos)
+e foi concebida para apoiar decisões estratégicas de campanha em três frentes principais:
+
+---
+
+#### 🗺️ Mapa de Votação — onde estão os votos?
+Visualize a distribuição geográfica dos votos por município para qualquer recorte de candidatos, partidos ou espectro político.
+Use para identificar **redutos eleitorais** de adversários ou aliados, detectar municípios sub-representados onde há espaço para crescimento,
+e orientar a alocação de caravanas, eventos e mídia regional.
+
+#### 💰 Custo por Voto — eficiência de campanha
+Compare quanto cada candidato gastou por voto obtido e como isso varia por partido, espectro e status.
+Use para **calibrar o orçamento** da campanha com base em benchmarks reais do estado,
+identificar perfis de candidatos que obtiveram grande volume de votos com baixo custo (eficiência)
+e dimensionar o retorno esperado de diferentes níveis de investimento.
+
+#### 📊 Finanças — de onde vem e para onde vai o dinheiro
+Explore o fluxo completo de receitas e despesas de qualquer candidato via diagrama Sankey.
+Use para entender **quais fontes de financiamento** dominam em cada segmento (partido, espectro, status)
+e como candidatos eleitos distribuem seus gastos entre tipos de despesa — insumo direto para a construção do plano financeiro.
+
+#### 📋 Consolidado — retrato do campo eleitoral
+Panorama completo do eleitorado de deputados federais: distribuição por status, partido, espectro, gênero, raça e faixa etária.
+Use para mapear **quem compõe a bancada**, identificar sub-representações e construir argumentos de posicionamento.
+
+#### ⚖️ 2018 vs 2022 — tendências eleitorais
+Compare as duas últimas eleições para identificar partidos em ascensão ou declínio, evolução do custo de campanha,
+mudanças na composição de gênero e espectro da bancada, e candidatos que se reelegeram.
+Use para antecipar **dinâmicas do próximo ciclo eleitoral**.
+
+---
+
+**Dica:** use os filtros na barra lateral para isolar um partido, espectro, grupo demográfico ou candidatos específicos —
+todos os gráficos se atualizam simultaneamente.
+""")
+
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 tabs = st.tabs(["🗺️ Mapa de Votação", "💰 Custo por Voto", "📊 Finanças",
                 "📋 Consolidado", "⚖️ 2018 vs 2022"])
