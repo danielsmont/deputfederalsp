@@ -62,6 +62,14 @@ def load_resumo(year: int) -> pd.DataFrame:
     )
     df["ANO"] = year
     df["NR_CANDIDATO"] = df["NR_CANDIDATO"].str.strip()
+    # Merge suffixes: both votes and cand files had DS_SIT_TOT_TURNO → _x/_y
+    if "DS_SIT_TOT_TURNO" not in df.columns:
+        src = "DS_SIT_TOT_TURNO_x" if "DS_SIT_TOT_TURNO_x" in df.columns else "DS_SIT_TOT_TURNO_y"
+        df = df.rename(columns={src: "DS_SIT_TOT_TURNO"})
+    # Drop the leftover duplicate suffix column if present
+    for c in ["DS_SIT_TOT_TURNO_x", "DS_SIT_TOT_TURNO_y"]:
+        if c in df.columns:
+            df = df.drop(columns=[c])
     for col in ["QT_VOTOS_NOMINAIS", "TOTAL_DESPESAS", "TOTAL_RECEITAS", "CUSTO_POR_VOTO"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
