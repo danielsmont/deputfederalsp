@@ -10,6 +10,7 @@ Data/agg/votos_por_municipio_*.csv
 !Data/agg/votos_municipio_agregado_*.csv
 !Data/agg/votos_municipio_eleitos_*.csv
 !Data/agg/votos_municipio_top200_*.csv
+!Data/agg/votos_muni_cand_*.csv
 !Data/agg/despesas_por_categoria_*.csv
 !Data/agg/receitas_por_fonte_*.csv
 

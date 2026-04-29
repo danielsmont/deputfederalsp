@@ -105,10 +105,10 @@ def load_votos_municipio_agregado(year: int) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_votos_municipio_cand(year: int) -> pd.DataFrame:
-    """Votes by candidate × municipality — top 200 voted candidates."""
+def load_votos_muni_cand(year: int) -> pd.DataFrame:
+    """Votes by candidate × municipality — all candidates with >0 votes. ~233K rows."""
     df = pd.read_csv(
-        os.path.join(AGG, f"votos_municipio_top200_{year}.csv"),
+        os.path.join(AGG, f"votos_muni_cand_{year}.csv"),
         dtype=str, encoding="utf-8-sig",
     )
     df["QT_VOTOS_NOMINAIS"] = pd.to_numeric(df["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0)
@@ -156,18 +156,19 @@ def load_municipios_geo():
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def build_choropleth(agg_mun: pd.DataFrame, color_scale: str = "YlOrRd"):
+def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS"):
     """
-    Join vote data to GeoJSON purely with pandas+json (no geopandas).
+    Join vote/metric data to GeoJSON purely with pandas+json (no geopandas).
     Returns (merged_df, annotated_geojson) ready for px.choropleth_mapbox.
-    locations='feat_idx', featureidkey='properties.feat_idx'
+    Use locations='feat_idx', featureidkey='properties.feat_idx'.
     """
     props_df, geojson = load_municipios_geo()
     agg_mun = agg_mun.copy()
     agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
-    merged = props_df.merge(agg_mun[["NM_UPPER", "QT_VOTOS_NOMINAIS"]],
-                            on="NM_UPPER", how="left")
-    merged["QT_VOTOS_NOMINAIS"] = merged["QT_VOTOS_NOMINAIS"].fillna(0)
+    cols_to_merge = ["NM_UPPER"] + [c for c in agg_mun.columns if c != "NM_UPPER"]
+    merged = props_df.merge(agg_mun, on="NM_UPPER", how="left")
+    if value_col in merged.columns:
+        merged[value_col] = merged[value_col].fillna(0)
     # Stamp feat_idx into each GeoJSON feature so plotly can match rows
     for _, row in merged.iterrows():
         geojson["features"][int(row["feat_idx"])]["properties"]["feat_idx"] = int(row["feat_idx"])
@@ -255,81 +256,74 @@ with tab_map:
     st.header(f"Mapa de Votação – {year_sel}")
     resumo = apply_filters(resumo_sel)
 
-    map_mode = st.radio(
-        "Visualização", ["Votos agregados (todos candidatos)", "Por candidato (top 200)"],
+    color_mode = st.radio(
+        "Cor representa",
+        ["Votos obtidos no município", "% dos votos dep. federal no município"],
         horizontal=True,
     )
 
-    if map_mode == "Por candidato (top 200)":
-        votos_cand = load_votos_municipio_cand(year_sel)
-        # Intersect with current filters
-        votos_cand = votos_cand[votos_cand["NR_CANDIDATO"].isin(resumo["NR_CANDIDATO"])]
+    # Aggregate filtered candidates → per municipality
+    votos_all = load_votos_muni_cand(year_sel)
+    votos_filt = votos_all[votos_all["NR_CANDIDATO"].isin(resumo["NR_CANDIDATO"])]
+    agg_mun = votos_filt.groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum().reset_index()
 
-        top_cands = (
-            resumo.dropna(subset=["QT_VOTOS_NOMINAIS"])
-            .sort_values("QT_VOTOS_NOMINAIS", ascending=False)
-            .head(200)
+    # Filter summary caption
+    n_cands   = resumo["NR_CANDIDATO"].nunique()
+    n_parties = resumo["SG_PARTIDO"].nunique()
+    total_v   = int(resumo["QT_VOTOS_NOMINAIS"].sum()) if "QT_VOTOS_NOMINAIS" in resumo.columns else 0
+    st.caption(f"Recorte: **{n_cands} candidatos** · **{n_parties} partidos** · **{total_v:,} votos totais**")
+
+    if color_mode == "% dos votos dep. federal no município":
+        total_mun = (
+            load_votos_municipio_agregado(year_sel)
+            [["NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"]]
+            .rename(columns={"QT_VOTOS_NOMINAIS": "TOTAL_MUN"})
         )
-        cand_opts = {
-            f"{r.get('NM_URNA_CANDIDATO') or r['NM_CANDIDATO']} "
-            f"({r['SG_PARTIDO']}) – {int(r['QT_VOTOS_NOMINAIS']):,} votos | {r['STATUS']}": r["NR_CANDIDATO"]
-            for _, r in top_cands.iterrows()
-            if r["NR_CANDIDATO"] in votos_cand["NR_CANDIDATO"].values
-        }
-        if not cand_opts:
-            st.info("Candidato não está nos top-200. Ajuste os filtros.")
-            st.stop()
-        cand_label = st.selectbox("Candidato", list(cand_opts.keys()))
-        nr_sel = cand_opts[cand_label]
-        agg_mun = (
-            votos_cand[votos_cand["NR_CANDIDATO"] == nr_sel]
-            .groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum()
-            .reset_index()
-        )
-        map_title = f"Votos por município – {cand_label.split('|')[0].strip()}"
+        agg_mun = agg_mun.merge(total_mun, on="NM_MUNICIPIO", how="left")
+        agg_mun["PCT"] = (
+            agg_mun["QT_VOTOS_NOMINAIS"] / agg_mun["TOTAL_MUN"].replace(0, np.nan) * 100
+        ).round(2).fillna(0)
+        color_col   = "PCT"
+        color_label = "% dos votos"
+        color_scale = "Blues"
+        map_title   = f"% dos votos dep. federal obtidos no município – {year_sel}"
     else:
-        agg_mun = load_votos_municipio_agregado(year_sel).rename(
-            columns={"NM_MUNICIPIO": "NM_MUNICIPIO"}
-        )
-        agg_mun = (agg_mun
-            .groupby("NM_MUNICIPIO")["QT_VOTOS_NOMINAIS"].sum()
-            .reset_index()
-        )
-        map_title = f"Total de votos nominais por município – {year_sel}"
+        color_col   = "QT_VOTOS_NOMINAIS"
+        color_label = "Votos"
+        color_scale = "YlOrRd"
+        map_title   = f"Votos obtidos por município – {year_sel}"
 
-    # Join to GeoJSON (pure pandas+json, no geopandas)
-    merged, geojson = build_choropleth(agg_mun)
+    merged, geojson = build_choropleth(agg_mun, value_col=color_col)
 
-    if merged["QT_VOTOS_NOMINAIS"].sum() == 0:
-        st.info("Nenhum dado de votos para este filtro.")
+    if merged[color_col].sum() == 0:
+        st.info("Nenhum voto para os filtros selecionados.")
     else:
+        hover_extra = {"PCT": ":.1f"} if color_col == "PCT" else {}
         fig = px.choropleth_mapbox(
             merged,
             geojson=geojson,
             locations="feat_idx",
             featureidkey="properties.feat_idx",
-            color="QT_VOTOS_NOMINAIS",
-            color_continuous_scale="YlOrRd",
+            color=color_col,
+            color_continuous_scale=color_scale,
             mapbox_style="carto-positron",
             zoom=6, center={"lat": -22.5, "lon": -48.5},
             opacity=0.75,
-            hover_data={"NM_MUNICIPIO": True, "QT_VOTOS_NOMINAIS": True},
-            labels={"QT_VOTOS_NOMINAIS": "Votos"},
+            hover_data={"NM_MUNICIPIO": True, "QT_VOTOS_NOMINAIS": True, **hover_extra},
+            labels={color_col: color_label, "QT_VOTOS_NOMINAIS": "Votos"},
             title=map_title,
         )
         fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, height=600)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Top 10 municipalities
-        top10 = agg_mun.sort_values("QT_VOTOS_NOMINAIS", ascending=False).head(10)
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.subheader("Top 10 municípios")
-            st.dataframe(
-                top10.rename(columns={"NM_MUNICIPIO": "Município", "QT_VOTOS_NOMINAIS": "Votos"})
-                .reset_index(drop=True),
-                hide_index=True, use_container_width=True,
-            )
+        top10 = agg_mun.sort_values(color_col, ascending=False).head(10).copy()
+        top10_disp = top10[["NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"]].rename(
+            columns={"NM_MUNICIPIO": "Município", "QT_VOTOS_NOMINAIS": "Votos"}
+        )
+        if color_col == "PCT":
+            top10_disp["% no mun."] = top10["PCT"].map("{:.1f}%".format)
+        st.subheader("Top 10 municípios")
+        st.dataframe(top10_disp.reset_index(drop=True), hide_index=True, use_container_width=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -338,6 +332,15 @@ with tab_map:
 with tab_cpv:
     st.header(f"Custo por Voto – {year_sel}")
     resumo = apply_filters(resumo_sel).dropna(subset=["QT_VOTOS_NOMINAIS", "TOTAL_DESPESAS"])
+
+    scope = st.radio(
+        "Escopo", ["Apenas eleitos", "Eleitos e suplentes", "Todos"],
+        horizontal=True, index=2, key="cpv_scope",
+    )
+    if scope == "Apenas eleitos":
+        resumo = resumo[resumo["ELEITO"]]
+    elif scope == "Eleitos e suplentes":
+        resumo = resumo[resumo["STATUS"].isin(["Eleito", "Suplente"])]
 
     if resumo.empty:
         st.info("Sem dados para os filtros selecionados.")
@@ -471,17 +474,32 @@ with tab_fin:
         link_tgt  += [node_idx[t] for t in targets]
         link_vals += desp_agg.values.tolist()
 
+        node_colors = (
+            ["#2980b9"] * len(sources)   # receitas – blue
+            + ["#2c3e50"]                # campanha – dark
+            + ["#c0392b"] * len(targets) # despesas – red
+        )
         fig = go.Figure(go.Sankey(
             arrangement="snap",
             node=dict(
                 label=nodes,
-                color=["#3498db"] * len(sources) + ["#2c3e50"] + ["#e74c3c"] * len(targets),
-                pad=20, thickness=20,
+                color=node_colors,
+                line=dict(color="white", width=1),
+                pad=25,
+                thickness=18,
             ),
-            link=dict(source=link_src, target=link_tgt, value=link_vals,
-                      color="rgba(150,150,150,0.3)"),
+            link=dict(
+                source=link_src, target=link_tgt, value=link_vals,
+                color="rgba(180,180,180,0.25)",
+            ),
+            textfont=dict(size=12, color="black", family="Arial, sans-serif"),
         ))
-        fig.update_layout(title_text=f"Fluxo Financeiro – {cand_label.split('(')[0].strip()}", height=550)
+        fig.update_layout(
+            title_text=f"Fluxo Financeiro – {cand_label.split('(')[0].strip()}",
+            height=560,
+            paper_bgcolor="white",
+            font=dict(size=12, color="black", family="Arial, sans-serif"),
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # Bar charts: revenue breakdown and expense breakdown
