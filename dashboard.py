@@ -162,8 +162,8 @@ def _norm_city(name: str) -> str:
     # Remove accents
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    # Drop apostrophes and hyphens, collapse spaces
-    s = s.replace("'", "").replace("-", " ")
+    # Replace apostrophes and hyphens with spaces, then collapse
+    s = s.replace("'", " ").replace("'", " ").replace("-", " ")
     s = " ".join(s.split())
     return s
 
