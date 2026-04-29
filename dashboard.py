@@ -229,6 +229,12 @@ with st.sidebar:
 
     status_sel = st.multiselect("Status", STATUS_ORDER, default=[], placeholder="Todos")
 
+    _max_votos = int(resumo_sel["QT_VOTOS_NOMINAIS"].max()) if "QT_VOTOS_NOMINAIS" in resumo_sel.columns else 500_000
+    min_votos = st.number_input(
+        "Mínimo de votos", min_value=0, max_value=_max_votos,
+        value=1000, step=500,
+    )
+
     # Candidate multi-select (filtered by other selections above)
     _cand_pool = resumo_sel.copy()
     if parties_sel:  _cand_pool = _cand_pool[_cand_pool["SG_PARTIDO"].isin(parties_sel)]
@@ -238,6 +244,7 @@ with st.sidebar:
     if age_sel and "FAIXA_ETARIA" in _cand_pool.columns:
         _cand_pool = _cand_pool[_cand_pool["FAIXA_ETARIA"].isin(age_sel)]
     if status_sel:   _cand_pool = _cand_pool[_cand_pool["STATUS"].isin(status_sel)]
+    _cand_pool = _cand_pool[pd.to_numeric(_cand_pool["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0) >= min_votos]
     _cand_pool = _cand_pool.sort_values("QT_VOTOS_NOMINAIS", ascending=False)
     _nm_col = "NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in _cand_pool.columns else "NM_CANDIDATO"
     _cand_options = [
@@ -270,6 +277,8 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     if age_sel and "FAIXA_ETARIA" in df.columns:
         df = df[df["FAIXA_ETARIA"].isin(age_sel)]
     if status_sel:   df = df[df["STATUS"].isin(status_sel)]
+    if "QT_VOTOS_NOMINAIS" in df.columns:
+        df = df[pd.to_numeric(df["QT_VOTOS_NOMINAIS"], errors="coerce").fillna(0) >= min_votos]
     if _cand_nr_sel: df = df[df["NR_CANDIDATO"].isin(_cand_nr_sel)]
     return df
 
