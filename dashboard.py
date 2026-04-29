@@ -2,7 +2,7 @@
 São Paulo – Deputado Federal 2018 & 2022
 Dashboard de Análise Eleitoral
 """
-import os, json, warnings
+import os, json, warnings, hashlib
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,6 +18,38 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── Authentication ────────────────────────────────────────────────────────────
+_USERS = {
+    "admin":      "52044f238728920cf11e17a0334793c5fd2cff4b57dc680f92fe566b8e667b82",
+    "NancyThame": "3c897def4a14c5092098ff6b9b71d3460287e0530989a172a16c25c192c6e3bc",
+}
+
+def _hash(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+def _login_page():
+    col_l, col_c, col_r = st.columns([1, 1.2, 1])
+    with col_c:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("## 🏛️ SP – Deputado Federal")
+        st.markdown("#### Acesso ao Dashboard")
+        st.markdown("---")
+        with st.form("login_form"):
+            username = st.text_input("Usuário")
+            password = st.text_input("Senha", type="password")
+            submitted = st.form_submit_button("Entrar", use_container_width=True)
+        if submitted:
+            if username in _USERS and _USERS[username] == _hash(password):
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+
+if not st.session_state.get("authenticated"):
+    _login_page()
+    st.stop()
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(__file__)
@@ -279,6 +311,13 @@ with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/Bandeira_do_estado_de_S%C3%A3o_Paulo.svg/200px-Bandeira_do_estado_de_S%C3%A3o_Paulo.svg.png", width=60)
     st.title("SP – Dep. Federal")
     st.caption("Eleições 2018 & 2022")
+
+    _user_display = st.session_state.get("username", "")
+    st.caption(f"👤 {_user_display}")
+    if st.button("Sair", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.session_state["username"] = ""
+        st.rerun()
 
     year_sel = st.selectbox("Ano", [2022, 2018], index=0)
     compare_mode = st.checkbox("Comparar 2018 vs 2022", value=False)
