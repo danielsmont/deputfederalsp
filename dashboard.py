@@ -82,16 +82,51 @@ def load_resumo(year: int) -> pd.DataFrame:
     # Spectrum
     df["ESPECTRO"] = df["SG_PARTIDO"].map(SPECTRUM).fillna("Centro")
     # Incumbent status
+    # TSE DS_OCUPACAO uses "DEPUTADO" (not "DEPUTADO FEDERAL" / "DEPUTADO ESTADUAL").
+    # For 2022 we cross-reference the 2018 elected list: if the candidate's name
+    # appears there, they are seeking re-election; otherwise they were a state deputy.
+    # For 2018 we have no 2014 baseline, so "DEPUTADO" is treated as Reeleição.
     if "DS_OCUPACAO" in df.columns:
-        def _mandato(ocup):
-            o = str(ocup).upper()
-            if "DEPUTADO FEDERAL" in o:
-                return "Reeleição"
-            elif "DEPUTADO ESTADUAL" in o or "DEPUTADO DISTRITAL" in o:
-                return "Dep. Estadual"
+        _elected_prev_names: set = set()
+        _prev_year = {2022: 2018}.get(year)
+        if _prev_year is not None:
+            try:
+                _prev_path = os.path.join(AGG, f"resumo_candidato_{_prev_year}.csv")
+                _prev_df = pd.read_csv(_prev_path, dtype=str, encoding="utf-8-sig",
+                                       usecols=lambda c: c in {
+                                           "NM_CANDIDATO",
+                                           "DS_SIT_TOT_TURNO",
+                                           "DS_SIT_TOT_TURNO_x",
+                                           "DS_SIT_TOT_TURNO_y",
+                                       })
+                _sit_col = next((c for c in ["DS_SIT_TOT_TURNO",
+                                             "DS_SIT_TOT_TURNO_x",
+                                             "DS_SIT_TOT_TURNO_y"]
+                                 if c in _prev_df.columns), None)
+                if _sit_col:
+                    _elected_prev_names = set(
+                        _prev_df[_prev_df[_sit_col].str.upper().isin(ELECTED_VALUES)
+                                ]["NM_CANDIDATO"].str.upper().str.strip()
+                    )
+            except Exception:
+                pass
+
+        def _mandato(row):
+            o   = str(row["DS_OCUPACAO"]).upper()
+            nm  = str(row["NM_CANDIDATO"]).upper().strip()
+            if "DEPUTADO" in o:
+                # If we have a reference year and the name matches an elected deputy → reelection
+                if _elected_prev_names and nm in _elected_prev_names:
+                    return "Reeleição"
+                # No reference list (2018) → assume federal incumbent
+                elif not _elected_prev_names:
+                    return "Reeleição"
+                else:
+                    return "Dep. Estadual"
             else:
                 return "Sem mandato"
-        df["MANDATO_ANTERIOR"] = df["DS_OCUPACAO"].apply(_mandato)
+
+        df["MANDATO_ANTERIOR"] = df.apply(_mandato, axis=1)
     else:
         df["MANDATO_ANTERIOR"] = "Sem mandato"
     # Age
