@@ -165,7 +165,9 @@ def build_choropleth(agg_mun: pd.DataFrame, value_col: str = "QT_VOTOS_NOMINAIS"
     props_df, geojson = load_municipios_geo()
     agg_mun = agg_mun.copy()
     agg_mun["NM_UPPER"] = agg_mun["NM_MUNICIPIO"].str.upper().str.strip()
-    cols_to_merge = ["NM_UPPER"] + [c for c in agg_mun.columns if c != "NM_UPPER"]
+    # Drop NM_MUNICIPIO from agg_mun to avoid _x/_y suffix collision on merge
+    # (props_df already carries NM_MUNICIPIO)
+    agg_mun = agg_mun.drop(columns=["NM_MUNICIPIO"], errors="ignore")
     merged = props_df.merge(agg_mun, on="NM_UPPER", how="left")
     if value_col in merged.columns:
         merged[value_col] = merged[value_col].fillna(0)
@@ -227,6 +229,35 @@ with st.sidebar:
 
     status_sel = st.multiselect("Status", STATUS_ORDER, default=[], placeholder="Todos")
 
+    # Candidate multi-select (filtered by other selections above)
+    _cand_pool = resumo_sel.copy()
+    if parties_sel:  _cand_pool = _cand_pool[_cand_pool["SG_PARTIDO"].isin(parties_sel)]
+    if spectra_sel:  _cand_pool = _cand_pool[_cand_pool["ESPECTRO"].isin(spectra_sel)]
+    if gender_sel and "DS_GENERO" in _cand_pool.columns:
+        _cand_pool = _cand_pool[_cand_pool["DS_GENERO"].isin(gender_sel)]
+    if age_sel and "FAIXA_ETARIA" in _cand_pool.columns:
+        _cand_pool = _cand_pool[_cand_pool["FAIXA_ETARIA"].isin(age_sel)]
+    if status_sel:   _cand_pool = _cand_pool[_cand_pool["STATUS"].isin(status_sel)]
+    _cand_pool = _cand_pool.sort_values("QT_VOTOS_NOMINAIS", ascending=False)
+    _nm_col = "NM_URNA_CANDIDATO" if "NM_URNA_CANDIDATO" in _cand_pool.columns else "NM_CANDIDATO"
+    _cand_options = [
+        f"{row[_nm_col]} ({row['SG_PARTIDO']})"
+        for _, row in _cand_pool.iterrows()
+    ]
+    cands_sel = st.multiselect(
+        "Candidatos", _cand_options, default=[],
+        placeholder="Todos os candidatos",
+        help="Deixe em branco para incluir todos. Selecione um ou mais para focar.",
+    )
+    # Map back to NR_CANDIDATO
+    _cand_nr_sel = set()
+    if cands_sel:
+        _label_to_nr = {
+            f"{row[_nm_col]} ({row['SG_PARTIDO']})": row["NR_CANDIDATO"]
+            for _, row in _cand_pool.iterrows()
+        }
+        _cand_nr_sel = {_label_to_nr[lbl] for lbl in cands_sel if lbl in _label_to_nr}
+
     st.divider()
     st.caption("Fonte: TSE Dados Abertos")
 
@@ -239,6 +270,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     if age_sel and "FAIXA_ETARIA" in df.columns:
         df = df[df["FAIXA_ETARIA"].isin(age_sel)]
     if status_sel:   df = df[df["STATUS"].isin(status_sel)]
+    if _cand_nr_sel: df = df[df["NR_CANDIDATO"].isin(_cand_nr_sel)]
     return df
 
 
